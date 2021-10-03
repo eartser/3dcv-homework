@@ -48,17 +48,49 @@ class _CornerStorageBuilder:
 
 def _build_impl(frame_sequence: pims.FramesSequence,
                 builder: _CornerStorageBuilder) -> None:
-    # TODO
-    image_0 = frame_sequence[0]
-    corners = FrameCorners(
-        np.array([0]),
-        np.array([[0, 0]]),
-        np.array([55])
-    )
-    builder.set_corners_at_frame(0, corners)
-    for frame, image_1 in enumerate(frame_sequence[1:], 1):
-        builder.set_corners_at_frame(frame, corners)
-        image_0 = image_1
+
+    def depth_to_255(img):
+        img = img * 255
+        return img.astype('uint8')
+
+    block_size = 12
+    quality = 0.05
+    min_distance = 8
+    win_size = 2 * block_size
+
+    ids = np.array([], dtype=int).reshape([-1, 1])
+    corners = np.array([], dtype=int).reshape([-1, 2])
+    next_id = 0
+
+    for frame, image in enumerate(frame_sequence):
+        mask = np.full_like(image, 255, dtype='uint8')
+        if corners.size != 0:
+            prev_image = frame_sequence[frame - 1]
+            corners, st, _ = cv2.calcOpticalFlowPyrLK(
+                depth_to_255(prev_image),
+                depth_to_255(image),
+                corners.astype('float32'),
+                None,
+                winSize=(win_size, win_size)
+            )
+            st = st.flatten() == 1
+            corners = corners[st].astype(int)
+            ids = ids[st]
+            for corner in corners:
+                cv2.circle(mask, corner, min_distance, 0, -1)
+        ext_corners = cv2.goodFeaturesToTrack(image, 0, quality, min_distance, mask=mask, blockSize=block_size)
+        if ext_corners is not None:
+            ext_corners = ext_corners.reshape([-1, 2]).astype(int)
+            ext_ids = np.array(range(next_id, next_id + len(ext_corners))).reshape([-1, 1])
+            next_id += len(ext_corners)
+            corners = np.vstack((corners, ext_corners))
+            ids = np.vstack((ids, ext_ids))
+        frame_corners = FrameCorners(
+            ids,
+            corners,
+            np.full((len(corners), 1), block_size)
+        )
+        builder.set_corners_at_frame(frame, frame_corners)
 
 
 def build(frame_sequence: pims.FramesSequence,
