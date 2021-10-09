@@ -54,12 +54,12 @@ def _build_impl(frame_sequence: pims.FramesSequence,
         return img.astype('uint8')
 
     block_size = 12
-    quality = 0.05
-    min_distance = 8
+    quality = 0.045
+    min_distance = 10
     win_size = 2 * block_size
 
     ids = np.array([], dtype=int).reshape([-1, 1])
-    corners = np.array([], dtype=int).reshape([-1, 2])
+    corners = np.array([], dtype=float).reshape([-1, 2])
     next_id = 0
 
     for frame, image in enumerate(frame_sequence):
@@ -74,20 +74,20 @@ def _build_impl(frame_sequence: pims.FramesSequence,
                 winSize=(win_size, win_size)
             )
             st = st.flatten() == 1
-            corners = corners[st].astype(int)
+            corners = corners[st]
             ids = ids[st]
-            for corner in corners:
+            for corner in corners.astype(int):
                 cv2.circle(mask, corner, min_distance, 0, -1)
         ext_corners = cv2.goodFeaturesToTrack(image, 0, quality, min_distance, mask=mask, blockSize=block_size)
         if ext_corners is not None:
-            ext_corners = ext_corners.reshape([-1, 2]).astype(int)
+            ext_corners = ext_corners.reshape([-1, 2])
             ext_ids = np.array(range(next_id, next_id + len(ext_corners))).reshape([-1, 1])
             next_id += len(ext_corners)
             corners = np.vstack((corners, ext_corners))
             ids = np.vstack((ids, ext_ids))
         frame_corners = FrameCorners(
             ids,
-            corners,
+            corners.astype(int),
             np.full((len(corners), 1), block_size)
         )
         builder.set_corners_at_frame(frame, frame_corners)
