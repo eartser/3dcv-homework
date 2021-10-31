@@ -53,9 +53,9 @@ def _build_impl(frame_sequence: pims.FramesSequence,
         img = img * 255
         return img.astype('uint8')
 
-    block_size = 12
+    block_size = 7
     quality = 0.045
-    min_distance = 10
+    min_distance = 7
     win_size = 2 * block_size
 
     ids = np.array([], dtype=int).reshape([-1, 1])
@@ -86,8 +86,8 @@ def _build_impl(frame_sequence: pims.FramesSequence,
             corners = np.vstack((corners, ext_corners))
             ids = np.vstack((ids, ext_ids))
         frame_corners = FrameCorners(
-            ids,
-            corners.astype(int),
+            ids.astype('int64'),
+            corners,
             np.full((len(corners), 1), block_size)
         )
         builder.set_corners_at_frame(frame, frame_corners)
