@@ -23,7 +23,10 @@ from _camtrack import (
     build_correspondences,
     triangulate_correspondences,
     TriangulationParameters,
-    rodrigues_and_translation_to_view_mat3x4
+    rodrigues_and_translation_to_view_mat3x4,
+    Correspondences,
+    _remove_correspondences_with_ids,
+    eye3x4,
 )
 
 
@@ -52,14 +55,75 @@ def _calc_view_matrix(cloud: PointCloudBuilder, corners: FrameCorners, intrinsic
     return rodrigues_and_translation_to_view_mat3x4(rvec, tvec)
 
 
+def _view_from_correspondences(correspondences: Correspondences,
+                               intrinsic_mat: np.ndarray,
+                               triang_params: TriangulationParameters,
+                               threshold_inl: float):
+    if len(correspondences.ids) < 5:
+        return None, 0
+    prob = 0.999
+    threshold = 1.0
+    emat, inliers = cv2.findEssentialMat(correspondences.points_1,
+                                         correspondences.points_2,
+                                         intrinsic_mat,
+                                         method=cv2.RANSAC,
+                                         prob=prob,
+                                         threshold=threshold)
+    inliers = inliers.flatten()
+
+    _, inliers_h = cv2.findHomography(correspondences.points_1,
+                                      correspondences.points_2,
+                                      cv2.RANSAC,
+                                      triang_params.max_reprojection_error)
+    if np.sum(inliers) / np.sum(inliers_h) < threshold_inl:
+        return None, 0
+
+    r1, r2, t_ = cv2.decomposeEssentialMat(emat)
+    best_viewmat = None
+    best_rt_points_number = 0
+    for r in [r1, r2]:
+        for t in [-t_, t_]:
+            view_mat = np.hstack([r, t.reshape(-1, 1)])
+            points3d, ids, median_cos = triangulate_correspondences(correspondences,
+                                                                    eye3x4(),
+                                                                    view_mat,
+                                                                    intrinsic_mat,
+                                                                    triang_params)
+            if len(points3d) > best_rt_points_number:
+                best_rt_points_number = len(points3d)
+                best_viewmat = view_mat
+    return best_viewmat, best_rt_points_number
+
+
+def _get_known_views(corner_storage: CornerStorage, intrinsic_mat: np.ndarray, triang_params: TriangulationParameters):
+    max_frame_dist = 30
+    threshold_inl = 0.2
+    points_number_threshold = 100
+    while threshold_inl < 1:
+        for i in range(len(corner_storage)):
+            for j in range(i + 1, min(i + max_frame_dist + 1, len(corner_storage))):
+                viewmat, points_number = _view_from_correspondences(
+                    build_correspondences(corner_storage[i], corner_storage[j]),
+                    intrinsic_mat,
+                    triang_params,
+                    threshold_inl
+                )
+                if viewmat is None or points_number < points_number_threshold:
+                    continue
+                return (
+                    (i, view_mat3x4_to_pose(eye3x4())),
+                    (j, view_mat3x4_to_pose(viewmat))
+                )
+        threshold_inl *= 2
+    raise RuntimeError(f'Ошибочка, не смогла инициализировать((')
+
+
 def track_and_calc_colors(camera_parameters: CameraParameters,
                           corner_storage: CornerStorage,
                           frame_sequence_path: str,
                           known_view_1: Optional[Tuple[int, Pose]] = None,
                           known_view_2: Optional[Tuple[int, Pose]] = None) \
         -> Tuple[List[Pose], PointCloud]:
-    if known_view_1 is None or known_view_2 is None:
-        raise NotImplementedError()
 
     rgb_sequence = frameseq.read_rgb_f32(frame_sequence_path)
     intrinsic_mat = to_opencv_camera_mat3x3(
@@ -73,7 +137,10 @@ def track_and_calc_colors(camera_parameters: CameraParameters,
         1.0,
         0.1
     )
-    eps = 10
+    eps = 60
+
+    if known_view_1 is None or known_view_2 is None:
+        known_view_1, known_view_2 = _get_known_views(corner_storage, intrinsic_mat, triangulate_params)
 
     frame_count = len(corner_storage)
     view_mats: list = [None] * frame_count
